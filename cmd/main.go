@@ -4,7 +4,8 @@ import (
 	"flag"
 	"fmt"
 
-	controller "go.nanomsg.org/mangos/v3/protocol/pub/Controller"
+	api "github.com/DavidCT9/Image_Filtering_API/Api"
+	controller "github.com/DavidCT9/Image_Filtering_API/Controller"
 )
 
 func main() {
@@ -15,5 +16,8 @@ func main() {
 
 	//creates and starts the master node
 	c := controller.NewController(*port)
-	c.StartController()
+	go c.StartController()
+
+	a := api.NewAPI(c, 8080)
+	a.Start()
 }
