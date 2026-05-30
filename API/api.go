@@ -36,6 +36,8 @@ func (a *API) Start() {
 	authorized.Use(a.authMiddleware())
 	{
 		authorized.DELETE("/logout", a.logout)
+		authorized.GET("/status", a.status)
+
 	}
 
 	router.Run(fmt.Sprintf(":%d", a.Port))
@@ -91,5 +93,17 @@ func (a *API) logout(c *gin.Context) {
 
 	c.JSON(200, gin.H{
 		"logout_message": "User logged out successfully",
+	})
+}
+
+func (a *API) status(c *gin.Context) {
+	workers := a.Controller.DataStore.GetWorkers()
+	workloads := a.Controller.DataStore.GetAllWorkloads()
+
+	c.JSON(200, gin.H{
+		"system_name":      "DPIP System",
+		"server_time":      time.Now().Format(time.RFC3339),
+		"active_workloads": workloads,
+		"workers":          workers,
 	})
 }

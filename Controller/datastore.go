@@ -82,6 +82,12 @@ func (d *DataStore) GetWorkload(id string) *Workload {
 	return nil
 }
 
+func (d *DataStore) GetAllWorkloads() []Workload {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+	return d.Workloads
+}
+
 func (d *DataStore) GetImage(id string) *Image {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()

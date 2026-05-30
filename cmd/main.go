@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 
-	api "github.com/DavidCT9/Image_Filtering_API/Api"
+	api "github.com/DavidCT9/Image_Filtering_API/API"
 	controller "github.com/DavidCT9/Image_Filtering_API/Controller"
 )
 
