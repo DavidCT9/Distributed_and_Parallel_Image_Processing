@@ -13,6 +13,7 @@ type Controller struct {
 	mutex        sync.Mutex
 }
 
+// each time the code start it creates an empty new controller
 func NewController(port int) *Controller {
 	return &Controller{
 		DataStore:    NewDataStore(),

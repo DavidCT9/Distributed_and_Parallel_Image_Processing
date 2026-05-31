@@ -4,6 +4,7 @@ import (
 	"sync"
 )
 
+// who would do the workloads
 type Worker struct {
 	ID          int
 	Name        string
@@ -13,6 +14,7 @@ type Worker struct {
 	RunningJobs int
 }
 
+// the job of filtering that was created by the client
 type Workload struct {
 	ID             string
 	Name           string
@@ -82,6 +84,7 @@ func (d *DataStore) GetWorkload(id string) *Workload {
 	return nil
 }
 
+// returns all of the workloads in the datastore
 func (d *DataStore) GetAllWorkloads() []Workload {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
@@ -97,4 +100,10 @@ func (d *DataStore) GetImage(id string) *Image {
 		}
 	}
 	return nil
+}
+
+func (d *DataStore) GetAllImages() []Image {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+	return d.Images
 }
