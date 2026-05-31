@@ -15,6 +15,7 @@ type RPCController struct {
 type RegisterArgs struct {
 	Name    string
 	Address string
+	Tags    []string
 }
 
 // the info that the controller (master node) sends back to the worker
@@ -24,7 +25,32 @@ type RegisterReply struct {
 	Token      string
 }
 
-// reguster the worker asigns its ID
+type WorkerStatsArgs struct {
+	WorkerID    int
+	CPU         float64
+	RAM         float64
+	RunningJobs int
+}
+
+type WorkerStatsReply struct {
+	OK bool
+}
+
+type ProcessImageJobArgs struct {
+	WorkloadID string
+	ImageID    string
+	Filter     string
+	APIAddress string
+	Token      string
+}
+
+type ProcessImageJobReply struct {
+	Success         bool
+	FilteredImageID string
+	Error           string
+}
+
+// RegisterWorker assigns an ID and records a worker in the datastore.
 func (r *RPCController) RegisterWorker(args RegisterArgs, reply *RegisterReply) error {
 	r.controller.mutex.Lock()
 	id := r.controller.nextWorkerID
@@ -34,21 +60,34 @@ func (r *RPCController) RegisterWorker(args RegisterArgs, reply *RegisterReply) 
 	worker := Worker{
 		ID:          id,
 		Name:        args.Name,
-		Adress:      args.Address,
+		Address:     args.Address,
+		Tags:        args.Tags,
 		RunningJobs: 0,
 	}
 
 	r.controller.DataStore.AddWorker(worker)
 
 	reply.WorkerID = id
-	reply.APIAddress = "http://localhost:8080"
-	reply.Token = "token"
+	reply.APIAddress = r.controller.APIAddress
+	reply.Token = r.controller.WorkerToken
 
-	fmt.Printf("[INFO] worker %s has been registered with workers id: %d\n", args.Name, id)
+	fmt.Printf("[INFO] worker %s has been registered with worker id: %d\n", args.Name, id)
+
+	go r.controller.SchedulePendingJobs()
 	return nil
 }
 
-// starts thw server and listens to each worker in their own goroutine
+func (r *RPCController) UpdateWorkerStats(args WorkerStatsArgs, reply *WorkerStatsReply) error {
+	if err := r.controller.DataStore.UpdateWorkerStats(args.WorkerID, args.CPU, args.RAM, args.RunningJobs); err != nil {
+		reply.OK = false
+		return err
+	}
+
+	reply.OK = true
+	return nil
+}
+
+// startRPC starts the server and serves each worker connection in its own goroutine.
 func (c *Controller) startRPC() {
 	rpc.Register(&RPCController{controller: c})
 

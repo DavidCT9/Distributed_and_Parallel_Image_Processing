@@ -1,11 +1,18 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	controller "github.com/DavidCT9/Image_Filtering_API/Controller"
 	"github.com/gin-gonic/gin"
@@ -47,7 +54,9 @@ func (a *API) Start() {
 
 	}
 
-	router.Run(fmt.Sprintf(":%d", a.Port))
+	if err := router.Run(fmt.Sprintf(":%d", a.Port)); err != nil {
+		panic(err)
+	}
 }
 
 // validates that the request has the same token
@@ -56,12 +65,18 @@ func (a *API) authMiddleware() gin.HandlerFunc {
 		token := c.GetHeader("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 
+		if a.Controller.IsWorkerToken(token) {
+			c.Set("token", token)
+			c.Next()
+			return
+		}
+
 		a.tokenMutex.RLock()
 		_, ok := a.tokens[token]
 		a.tokenMutex.RUnlock()
 
 		if !ok {
-			c.JSON(401, gin.H{"error": "unauthorized"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
 		}
@@ -74,17 +89,17 @@ func (a *API) authMiddleware() gin.HandlerFunc {
 func (a *API) login(c *gin.Context) {
 	user, password, ok := c.Request.BasicAuth()
 	if !ok || user != "user" || password != "password" {
-		c.JSON(401, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	token := fmt.Sprintf("%d", time.Now().UnixNano())
+	token := generateToken()
 
 	a.tokenMutex.Lock()
 	a.tokens[token] = user
 	a.tokenMutex.Unlock()
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"message": "Hello!, welcome to the DPIP System",
 		"token":   token,
 	})
@@ -98,7 +113,7 @@ func (a *API) logout(c *gin.Context) {
 	delete(a.tokens, token)
 	a.tokenMutex.Unlock()
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"logout_message": "User logged out successfully",
 	})
 }
@@ -107,7 +122,7 @@ func (a *API) status(c *gin.Context) {
 	workers := a.Controller.DataStore.GetWorkers()
 	workloads := a.Controller.DataStore.GetAllWorkloads()
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"system_name":      "DPIP System",
 		"server_time":      time.Now().Format(time.RFC3339),
 		"active_workloads": workloads,
@@ -122,68 +137,84 @@ func (a *API) createWorkload(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(400, gin.H{"error": "invalid request"})
+		if errors.Is(err, io.EOF) {
+			body.Filter = "grayscale"
+			body.Name = fmt.Sprintf("workload_%d", time.Now().UnixNano())
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+	}
+
+	body.Filter = strings.ToLower(strings.TrimSpace(body.Filter))
+	body.Name = strings.TrimSpace(body.Name)
+
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workload_name is required"})
+		return
+	}
+	if body.Filter != "grayscale" && body.Filter != "blur" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "filter must be grayscale or blur"})
 		return
 	}
 
+	workloadID := fmt.Sprintf("%d", time.Now().UnixNano())
+	directory := fmt.Sprintf("%s_%s", safeName(body.Name), workloadID)
 	workload := controller.Workload{
-		ID:             fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:             workloadID,
 		Name:           body.Name,
+		Directory:      directory,
 		Filter:         body.Filter,
-		Status:         "scheduling",
+		Status:         controller.WorkloadScheduling,
 		RunningJobs:    0,
 		FilteredImages: []string{},
 	}
 
+	if err := os.MkdirAll(filepath.Join("images", workload.Directory), 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create workload directory"})
+		return
+	}
+
 	a.Controller.DataStore.AddWorkload(workload)
 
-	c.JSON(200, gin.H{
-		"workload_id":     workload.ID,
-		"filter":          workload.Filter,
-		"workload_name":   workload.Name,
-		"status":          workload.Status,
-		"running_jobs":    workload.RunningJobs,
-		"filtered_images": workload.FilteredImages,
-	})
+	c.JSON(http.StatusOK, workloadResponse(workload))
 }
 
 // getWorkload regresa los detalles de un workload específico por su ID
 func (a *API) getWorkload(c *gin.Context) {
 	id := c.Param("id")
 
-	workload := a.Controller.DataStore.GetWorkload(id)
-	if workload == nil {
-		c.JSON(404, gin.H{"error": "workload not found"})
+	workload, ok := a.Controller.DataStore.GetWorkload(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workload not found"})
 		return
 	}
 
-	c.JSON(200, gin.H{
-		"workload_id":     workload.ID,
-		"filter":          workload.Filter,
-		"workload_name":   workload.Name,
-		"status":          workload.Status,
-		"running_jobs":    workload.RunningJobs,
-		"filtered_images": workload.FilteredImages,
-	})
+	c.JSON(http.StatusOK, workloadResponse(workload))
 }
 
 // uploadImage recibe una imagen, la guarda en disco y la registra en el datastore
 // uploadImage receives an image, saves it to disk and registers it in the datastore
 func (a *API) uploadImage(c *gin.Context) {
 	workloadID := c.PostForm("workload_id")
-	imageType := c.PostForm("type")
+	imageType := strings.ToLower(strings.TrimSpace(c.PostForm("type")))
+
+	if imageType != controller.ImageOriginal && imageType != controller.ImageFiltered {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type must be original or filtered"})
+		return
+	}
 
 	// make sure the workload exists before saving the image
-	workload := a.Controller.DataStore.GetWorkload(workloadID)
-	if workload == nil {
-		c.JSON(404, gin.H{"error": "workload not found"})
+	workload, ok := a.Controller.DataStore.GetWorkload(workloadID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workload not found"})
 		return
 	}
 
 	// get the image file from the request
 	file, err := c.FormFile("data")
 	if err != nil {
-		c.JSON(400, gin.H{"error": "image not found in request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image not found in request"})
 		return
 	}
 
@@ -191,25 +222,33 @@ func (a *API) uploadImage(c *gin.Context) {
 	imageID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// create the workload directory if it doesn't exist
-	dir := fmt.Sprintf("images/%s", workloadID)
-	os.MkdirAll(dir, os.ModePerm)
+	dir := filepath.Join("images", workload.Directory)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create image directory"})
+		return
+	}
 
 	// save the image to disk
-	path := fmt.Sprintf("%s/%s.png", dir, imageID)
+	path := filepath.Join(dir, imageID+imageExtension(file.Filename))
 	if err := c.SaveUploadedFile(file, path); err != nil {
-		c.JSON(500, gin.H{"error": "could not save image"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not save image"})
 		return
 	}
 
 	// register the image in the datastore
 	image := controller.Image{
-		ImageID:     imageID,
-		WorkloadID:  workloadID,
-		TypeOfImage: imageType,
+		ImageID:    imageID,
+		WorkloadID: workloadID,
+		Type:       imageType,
+		Path:       path,
 	}
 	a.Controller.DataStore.AddImage(image)
 
-	c.JSON(200, gin.H{
+	if imageType == controller.ImageOriginal {
+		go a.Controller.SchedulePendingJobs()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
 		"image_id":    imageID,
 		"workload_id": workloadID,
 		"type":        imageType,
@@ -220,26 +259,74 @@ func (a *API) uploadImage(c *gin.Context) {
 func (a *API) downloadImage(c *gin.Context) {
 	id := c.Param("id")
 
-	image := a.Controller.DataStore.GetImage(id)
-	if image == nil {
-		c.JSON(404, gin.H{"error": "image not found"})
+	image, ok := a.Controller.DataStore.GetImage(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
 		return
 	}
-
-	// build the path where the image is stored on disk
-	path := fmt.Sprintf("images/%s/%s.png", image.WorkloadID, image.ImageID)
 
 	// check that the file actually exists on disk
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		c.JSON(404, gin.H{"error": "image file not found"})
+	if _, err := os.Stat(image.Path); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "image file not found"})
 		return
 	}
 
-	c.File(path)
+	c.File(image.Path)
 }
 
 // getImages returns the list of all images registered in the datastore
 func (a *API) getImages(c *gin.Context) {
 	images := a.Controller.DataStore.GetAllImages()
-	c.JSON(200, images)
+	c.JSON(http.StatusOK, images)
+}
+
+func workloadResponse(workload controller.Workload) gin.H {
+	return gin.H{
+		"workload_id":     workload.ID,
+		"filter":          workload.Filter,
+		"workload_name":   workload.Name,
+		"status":          workload.Status,
+		"running_jobs":    workload.RunningJobs,
+		"filtered_images": workload.FilteredImages,
+	}
+}
+
+func generateToken() string {
+	bytes := make([]byte, 24)
+	if _, err := rand.Read(bytes); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
+}
+
+func imageExtension(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return ext
+	default:
+		return ".png"
+	}
+}
+
+func safeName(value string) string {
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(value) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+
+	result := strings.Trim(builder.String(), "-")
+	if result == "" {
+		return "workload"
+	}
+	return result
 }

@@ -1,0 +1,20 @@
+Instructions_and_sources/
+desktop.ini
+
+# Generated runtime data
+images/
+frames/
+filtered/
+filtered-frames/
+*.mp4
+*.avi
+
+# Build outputs and logs
+*.exe
+*.test
+*.out
+*.log
+
+# Local editor/system files
+.DS_Store
+Thumbs.db

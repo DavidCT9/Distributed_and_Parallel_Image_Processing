@@ -16,6 +16,7 @@ func main() {
 
 	//creates and starts the master node
 	c := controller.NewController(*port)
+	c.SetAPIAddress("http://localhost:8080")
 	go c.StartController()
 
 	a := api.NewAPI(c, 8080)
