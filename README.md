@@ -82,4 +82,6 @@ Demo credentials:
 
 ## Members
 
-- Add team member names here before submission.
+- David Contreras Tiscareño
+- Diego Amín Hernández Pallares
+- Ana Maria Guzmán Solís 
