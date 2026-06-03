@@ -91,6 +91,13 @@ curl.exe -X POST http://localhost:8080/workloads `
   -d "{\"filter\":\"grayscale\",\"workload_name\":\"demo\"}"
 ```
 
+Possible error:
+If the previous command didnt worked (you are probably in powershell )use the following:
+```powershell
+curl.exe -X POST http://localhost:8080/workloads -H "Authorization: Bearer <TOKEN>"
+-H "Content-Type: application/json" -d '{\"filter\":\"grayscale\",\"workload_name\":\"demo\"}'
+```
+
 Save the returned `workload_id`.
 
 For compatibility with the provided test guide, `POST /workloads` with an empty body also creates a default grayscale workload.
@@ -135,7 +142,7 @@ The `Tests/` folder contains the helper scripts that can be used to test the sys
 
 ### Extract video frames
 
-Download a sample video such as Big Buck Bunny, then extract frames:
+Download a sample video such as Big Buck Bunny and put it in the root file, then extract frames:
 
 ```powershell
 python Tests\video_utils_windows.py -action extract big_buck_bunny_720p_stereo.avi frames
